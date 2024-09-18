@@ -96,7 +96,8 @@ def insert_data_to_qdrant(data):
 if __name__ == "__main__":
     ensure_collection_exists()
     
-    data_dir = '/Users/ojusave/Desktop/QDrant example/data'  # Replace with the actual path
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    data_dir = os.path.join(script_dir, '..', 'data')  # Replace with the actual path
 
     for file_name in os.listdir(data_dir):
         if file_name.endswith('.txt'):
