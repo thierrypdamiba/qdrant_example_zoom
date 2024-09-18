@@ -44,13 +44,13 @@ model = SentenceTransformer('all-MiniLM-L6-v2')
 # Define collection name
 collection_name = 'user_recordings'
 
-def query_vector_db(meeting_purpose):
-    purpose_vector = model.encode(meeting_purpose).tolist()
+def query_vector_db(user_profile):
+    profile_vector = model.encode(user_profile).tolist()
     
     # Perform search
     search_result = client.search(
         collection_name=collection_name,
-        query_vector=purpose_vector,
+        query_vector=profile_vector,
         limit=10  # Increased limit for more context
     )
 
@@ -67,7 +67,7 @@ def query_vector_db(meeting_purpose):
     
     return formatted_results
 
-def get_anthropic_response(meeting_purpose, search_results):
+def get_anthropic_response(user_profile, search_results):
     if not anthropic_api_key:
         raise ValueError("Anthropic API key not set.")
 
@@ -77,26 +77,22 @@ def get_anthropic_response(meeting_purpose, search_results):
         model="claude-3-5-sonnet-20240620",
         max_tokens=1000,
         temperature=0,
-        system="You are an AI assistant tasked with suggesting meetings and participants based on a given purpose.",
+        system="You are an AI assistant tasked with recommending meetings for a user to attend based on their profile and past meeting records.",
         messages=[
             {
                 "role": "user",
-                "content": f"Based on the following meeting records, please suggest a meeting structure and potential participants for the following purpose: '{meeting_purpose}'\n\nRelevant Meeting Records:\n{json.dumps(search_results, indent=2)}\n\nPlease provide:\n1. A suggested meeting title\n2. A brief meeting agenda\n3. A list of recommended participants and why they should be invited\n4. Any additional suggestions for making the meeting effective\n\nFormat your response as a JSON object with keys: 'title', 'agenda', 'participants', and 'additional_suggestions'."
+                "content": f"Based on the following user profile and meeting records, please recommend meetings for the user to attend:\n\nUser Profile: '{user_profile}'\n\nRelevant Meeting Records:\n{json.dumps(search_results, indent=2)}\n\nPlease provide:\n1. A list of recommended meetings to attend, with brief explanations\n2. Any additional suggestions for the user's professional development based on their profile and the available meetings"
             }
         ]
     )
-
-    # Return the raw content instead of trying to parse it
+    
     return message.content
 
 if __name__ == "__main__":
     if len(sys.argv) > 1:
-        meeting_purpose = " ".join(sys.argv[1:])
-        print(f"\nMeeting Purpose: {meeting_purpose}")
-        print("\nSearching for relevant meeting records...")
-        search_results = query_vector_db(meeting_purpose)
-        print("Generating suggestions...")
-        suggestions = get_anthropic_response(meeting_purpose, search_results)
-        print(suggestions)  # Print the raw suggestions
+        user_profile = " ".join(sys.argv[1:])
+        search_results = query_vector_db(user_profile)
+        recommendations = get_anthropic_response(user_profile, search_results)
+        print(f"Meeting Recommendations:\n{recommendations}")
     else:
-        print("No meeting purpose provided. Please specify what you want to do.")
+        print("No user profile provided. Please specify the user's profile and interests.")

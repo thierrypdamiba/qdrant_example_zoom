@@ -1,12 +1,10 @@
 import sys
 import os
-import re
 from qdrant_client import QdrantClient
 from sentence_transformers import SentenceTransformer
 import anthropic
-import json
 import warnings
-import os
+import re
 
 # Suppress specific warnings
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -44,14 +42,14 @@ model = SentenceTransformer('all-MiniLM-L6-v2')
 # Define collection name
 collection_name = 'user_recordings'
 
-def query_vector_db(meeting_purpose):
-    purpose_vector = model.encode(meeting_purpose).tolist()
+def query_vector_db(sentiment_query):
+    query_vector = model.encode(sentiment_query).tolist()
     
     # Perform search
     search_result = client.search(
         collection_name=collection_name,
-        query_vector=purpose_vector,
-        limit=10  # Increased limit for more context
+        query_vector=query_vector,
+        limit=10
     )
 
     # Format the search results
@@ -67,36 +65,63 @@ def query_vector_db(meeting_purpose):
     
     return formatted_results
 
-def get_anthropic_response(meeting_purpose, search_results):
+def get_anthropic_response(sentiment_query, search_results):
     if not anthropic_api_key:
         raise ValueError("Anthropic API key not set.")
 
     client = anthropic.Anthropic(api_key=anthropic_api_key)
 
+    prompt = f"""
+    You are an AI assistant tasked with analyzing the sentiment of company meeting transcripts.
+    Your goal is to assess the overall sentiment on a scale from 1 to 10, where:
+    
+    1 = Extremely negative
+    5 = Neutral
+    10 = Extremely positive
+    
+    Please analyze the following meeting summaries and provide a sentiment analysis:
+    
+    Query: {sentiment_query}
+    
+    Meeting Summaries:
+    {search_results}
+    
+    In your response, include:
+    1. The overall sentiment score (1-10) for the meetings related to the query
+    2. A brief explanation of why you assigned this score
+    3. Key phrases or topics that influenced your sentiment analysis
+    4. If multiple meetings are relevant, provide a sentiment analysis for each
+    
+    Format your response as follows:
+    Overall Sentiment Score: [score]
+    Explanation: [your explanation]
+    Key Factors: [list of key phrases or topics]
+    Individual Meeting Analyses: [if applicable]
+    """
+
     message = client.messages.create(
         model="claude-3-5-sonnet-20240620",
         max_tokens=1000,
         temperature=0,
-        system="You are an AI assistant tasked with suggesting meetings and participants based on a given purpose.",
         messages=[
             {
                 "role": "user",
-                "content": f"Based on the following meeting records, please suggest a meeting structure and potential participants for the following purpose: '{meeting_purpose}'\n\nRelevant Meeting Records:\n{json.dumps(search_results, indent=2)}\n\nPlease provide:\n1. A suggested meeting title\n2. A brief meeting agenda\n3. A list of recommended participants and why they should be invited\n4. Any additional suggestions for making the meeting effective\n\nFormat your response as a JSON object with keys: 'title', 'agenda', 'participants', and 'additional_suggestions'."
+                "content": prompt
             }
         ]
     )
-
-    # Return the raw content instead of trying to parse it
+    
     return message.content
+
+def analyze_sentiment(query):
+    search_results = query_vector_db(query)
+    sentiment_analysis = get_anthropic_response(query, search_results)
+    return sentiment_analysis
 
 if __name__ == "__main__":
     if len(sys.argv) > 1:
-        meeting_purpose = " ".join(sys.argv[1:])
-        print(f"\nMeeting Purpose: {meeting_purpose}")
-        print("\nSearching for relevant meeting records...")
-        search_results = query_vector_db(meeting_purpose)
-        print("Generating suggestions...")
-        suggestions = get_anthropic_response(meeting_purpose, search_results)
-        print(suggestions)  # Print the raw suggestions
+        sentiment_query = " ".join(sys.argv[1:])
+        result = analyze_sentiment(sentiment_query)
+        print(f"Sentiment Analysis:\n{result}")
     else:
-        print("No meeting purpose provided. Please specify what you want to do.")
+        print("No sentiment query provided. Please specify a query to analyze sentiment in the meeting transcripts.")

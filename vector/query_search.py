@@ -1,12 +1,10 @@
 import sys
 import os
-import re
 from qdrant_client import QdrantClient
 from sentence_transformers import SentenceTransformer
 import anthropic
-import json
 import warnings
-import os
+import re
 
 # Suppress specific warnings
 warnings.filterwarnings("ignore", category=FutureWarning)
@@ -44,14 +42,14 @@ model = SentenceTransformer('all-MiniLM-L6-v2')
 # Define collection name
 collection_name = 'user_recordings'
 
-def query_vector_db(meeting_purpose):
-    purpose_vector = model.encode(meeting_purpose).tolist()
+def query_vector_db(search_query):
+    query_vector = model.encode(search_query).tolist()
     
     # Perform search
     search_result = client.search(
         collection_name=collection_name,
-        query_vector=purpose_vector,
-        limit=10  # Increased limit for more context
+        query_vector=query_vector,
+        limit=10
     )
 
     # Format the search results
@@ -67,36 +65,52 @@ def query_vector_db(meeting_purpose):
     
     return formatted_results
 
-def get_anthropic_response(meeting_purpose, search_results):
+def get_anthropic_response(search_query, search_results):
     if not anthropic_api_key:
         raise ValueError("Anthropic API key not set.")
 
     client = anthropic.Anthropic(api_key=anthropic_api_key)
 
+    prompt = f"""
+    You are an AI assistant tasked with searching through past meeting transcripts.
+    Your goal is to find relevant information based on the user's query.
+    
+    Please search for the following query:
+    {search_query}
+    
+    Based on the following meeting summaries:
+    {search_results}
+    
+    Provide a concise summary of the relevant information found in the meeting transcripts.
+    Include the date of the meeting if available, and any key points or decisions made related to the query.
+    If multiple relevant meetings are found, summarize the information from each meeting separately.
+    
+    If no relevant information is found, please state that clearly.
+    """
+
     message = client.messages.create(
         model="claude-3-5-sonnet-20240620",
         max_tokens=1000,
         temperature=0,
-        system="You are an AI assistant tasked with suggesting meetings and participants based on a given purpose.",
         messages=[
             {
                 "role": "user",
-                "content": f"Based on the following meeting records, please suggest a meeting structure and potential participants for the following purpose: '{meeting_purpose}'\n\nRelevant Meeting Records:\n{json.dumps(search_results, indent=2)}\n\nPlease provide:\n1. A suggested meeting title\n2. A brief meeting agenda\n3. A list of recommended participants and why they should be invited\n4. Any additional suggestions for making the meeting effective\n\nFormat your response as a JSON object with keys: 'title', 'agenda', 'participants', and 'additional_suggestions'."
+                "content": prompt
             }
         ]
     )
-
-    # Return the raw content instead of trying to parse it
+    
     return message.content
+
+def search_meetings(query):
+    search_results = query_vector_db(query)
+    meeting_summary = get_anthropic_response(query, search_results)
+    return meeting_summary
 
 if __name__ == "__main__":
     if len(sys.argv) > 1:
-        meeting_purpose = " ".join(sys.argv[1:])
-        print(f"\nMeeting Purpose: {meeting_purpose}")
-        print("\nSearching for relevant meeting records...")
-        search_results = query_vector_db(meeting_purpose)
-        print("Generating suggestions...")
-        suggestions = get_anthropic_response(meeting_purpose, search_results)
-        print(suggestions)  # Print the raw suggestions
+        search_query = " ".join(sys.argv[1:])
+        result = search_meetings(search_query)
+        print(f"Meeting Search Results:\n{result}")
     else:
-        print("No meeting purpose provided. Please specify what you want to do.")
+        print("No search query provided. Please specify a query to search the meeting transcripts.")
