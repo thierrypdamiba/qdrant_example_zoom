@@ -1,8 +1,13 @@
 from qdrant_client import QdrantClient
 from qdrant_client.models import VectorParams, Distance
+import os
 
-# Connect to Qdrant
-qdrant_client = QdrantClient("localhost", port=6333)
+# Load Qdrant cloud URL and API key from environment variables
+qdrant_url = os.getenv("QDRANT_URL")
+qdrant_api_key = os.getenv("QDRANT_API_KEY")
+
+# Connect to Qdrant cloud
+qdrant_client = QdrantClient(url=qdrant_url, api_key=qdrant_api_key)
 
 # Check if collection exists
 collection_name = "user_recordings"
