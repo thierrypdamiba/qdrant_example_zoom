@@ -27,9 +27,16 @@ def ensure_collection_exists():
     print(f"Collection '{collection_name}' is ready.")
 
 def load_data(file_path):
-    with open(file_path, 'r') as f:
-        data = json.load(f)
-    return data
+    try:
+        with open(file_path, 'r') as f:
+            data = json.load(f)
+        return data
+    except json.JSONDecodeError as e:
+        print(f"Error decoding JSON from {file_path}: {e}")
+        return None
+    except Exception as e:
+        print(f"Error reading file {file_path}: {e}")
+        return None
 
 def base64_to_uuid(base64_string):
     try:
@@ -96,13 +103,18 @@ def insert_data_to_qdrant(data):
 if __name__ == "__main__":
     ensure_collection_exists()
     
-    data_dir = '/Users/ojusave/Desktop/QDrant example/data'  # Replace with the actual path
-
+    # Specify your local data directory path
+    data_dir = 'data'  # This directory should be in the same folder as the script
+    
+    # Process all JSON files in the data directory
     for file_name in os.listdir(data_dir):
-        if file_name.endswith('.txt'):
+        if file_name.endswith('.json'):  # Changed from .txt to .json
             file_path = os.path.join(data_dir, file_name)
-            print(f"Processing file: {file_path}")
+            print(f"\nProcessing file: {file_path}")
             data = load_data(file_path)
-            insert_data_to_qdrant(data)
+            if data:
+                insert_data_to_qdrant(data)
+            else:
+                print(f"Skipping file {file_path} due to loading error")
 
-print("Data insertion complete.")
+    print("\nData insertion complete.")
