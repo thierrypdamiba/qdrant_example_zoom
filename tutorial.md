@@ -39,7 +39,7 @@ In this hands-on tutorial, we'll create a system that:
 1. **Clone the Repository**:
    ```bash
    git clone <repository-url>
-   cd ai-meeting-assistant
+   cd qdrant-agentic-rag
    ```
 
 2. **Create and Activate a Python Virtual Environment**:
