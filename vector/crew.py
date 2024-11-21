@@ -1,175 +1,206 @@
 import sys
 import os
-import re
 from crewai import Agent, Task, Crew
+from crewai.tools import BaseTool
+from typing import Type, List, Dict
+from pydantic import BaseModel, Field
 from qdrant_client import QdrantClient
 from openai import OpenAI
-from langchain.tools import BaseTool
-from typing import Any, Type
-from pydantic import BaseModel, Field
+from sentence_transformers import SentenceTransformer
 import anthropic
+from datetime import datetime
+from dotenv import load_dotenv
+from pathlib import Path
 
-# Load configuration
-def load_config():
-    current_dir = os.path.dirname(os.path.abspath(__file__))
-    root_dir = os.path.dirname(current_dir)
-    config_path = os.path.join(root_dir, 'config.js')
-    
-    with open(config_path, 'r') as f:
-        config_content = f.read()
-    
-    config = {}
-    pattern = r"(\w+):\s*['\"]?([\w\-\.]+)['\"]?"
-    matches = re.findall(pattern, config_content)
-    for key, value in matches:
-        config[key] = value
-    
-    return config
+# Load environment variables from .env.local
+env_path = Path(__file__).parent.parent / '.env.local'
+load_dotenv(env_path)
 
-config = load_config()
+# Set API keys from environment
+os.environ['OPENAI_API_KEY'] = os.getenv('openai_api_key')
+ANTHROPIC_API_KEY = os.getenv('anthropic_api_key')
 
-# Set API keys from config
-os.environ['OPENAI_API_KEY'] = config.get('openai_api_key')
-ANTHROPIC_API_KEY = config.get('anthropic_api_key')
+# Initialize clients
+qdrant_client = QdrantClient(
+    url=os.getenv('qdrantUrl'),
+    api_key=os.getenv('qdrantApiKey')
+)
+openai_client = OpenAI(api_key=os.environ['OPENAI_API_KEY'])
+embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
+
+# Define tool input schemas
+class CalculatorInput(BaseModel):
+    """Input schema for calculator tools."""
+    a: int = Field(..., description="First number")
+    b: int = Field(..., description="Second number")
 
 class SearchInput(BaseModel):
-    """Input for the search tool."""
-    query: str = Field(..., description="The search query to find relevant meeting recordings")
+    """Input schema for search tool."""
+    query: str = Field(..., description="The search query")
 
-class AnthropicInput(BaseModel):
-    """Input for the Anthropic analysis tool."""
-    query: str = Field(..., description="The original query")
-    search_results: list = Field(..., description="The search results to analyze")
+class AnalysisInput(BaseModel):
+    """Input schema for meeting analysis tool."""
+    meeting_data: dict = Field(..., description="Meeting data to analyze")
 
-class QdrantSearchTool(BaseTool):
+# Define custom tools
+class CalculatorTool(BaseTool):
+    name: str = "calculator"
+    description: str = "Perform basic mathematical calculations"
+    args_schema: Type[BaseModel] = CalculatorInput
+
+    def _run(self, a: int, b: int) -> dict:
+        return {
+            "addition": a + b,
+            "multiplication": a * b
+        }
+
+class SearchMeetingsTool(BaseTool):
     name: str = "search_meetings"
-    description: str = "Search through meeting recordings to find relevant information"
+    description: str = "Search through meeting recordings using vector similarity"
     args_schema: Type[BaseModel] = SearchInput
-    
-    qdrant_client: QdrantClient
-    openai_client: OpenAI
-    
-    def __init__(self, qdrant_client: QdrantClient, openai_client: OpenAI):
-        super().__init__()
-        self.qdrant_client = qdrant_client
-        self.openai_client = openai_client
-        
-    def _run(self, query: str) -> Any:
-        # Get embedding from OpenAI
-        response = self.openai_client.embeddings.create(
+
+    def _run(self, query: str) -> List[Dict]:
+        # Use OpenAI embeddings to match data_loader.py
+        response = openai_client.embeddings.create(
             model="text-embedding-ada-002",
             input=query
         )
         query_vector = response.data[0].embedding
-
-        # Search Qdrant
-        search_result = self.qdrant_client.search(
-            collection_name='user_recordings',
-            query_vector=query_vector,
-            limit=5
-        )
-
-        # Format results
-        formatted_results = []
-        for hit in search_result:
-            result = {
-                "Score": hit.score,
-                "Topic": hit.payload.get('topic', 'N/A'),
-                "Start Time": hit.payload.get('start_time', 'N/A'),
-                "Duration": hit.payload.get('duration', 'N/A'),
-                "Summary": hit.payload.get('summary', {}).get('summary_overview', 'N/A')
-            }
-            formatted_results.append(result)
         
-        return formatted_results
+        search_results = qdrant_client.search(
+            collection_name='zoom_recordings',
+            query_vector=query_vector,
+            limit=10,
+            score_threshold=0.7
+        )
+        
+        return [
+            {
+                "score": hit.score,
+                "topic": hit.payload.get('topic', 'N/A'),
+                "start_time": hit.payload.get('start_time', 'N/A'),
+                "duration": hit.payload.get('duration', 'N/A'),
+                "summary": hit.payload.get('summary', {}).get('summary_overview', 'N/A')
+            }
+            for hit in search_results
+        ]
 
-    async def _arun(self, query: str) -> Any:
-        raise NotImplementedError("Async not implemented")
+class MeetingAnalysisTool(BaseTool):
+    name: str = "analyze_meeting"
+    description: str = "Analyze meeting content using Claude"
+    args_schema: Type[BaseModel] = AnalysisInput
 
-class AnthropicAnalysisTool(BaseTool):
-    name: str = "analyze_with_anthropic"
-    description: str = "Analyze search results using Anthropic's Claude to provide insights"
-    args_schema: Type[BaseModel] = AnthropicInput
-    
-    def __init__(self):
-        super().__init__()
-        self.client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
-    
-    def _run(self, query: str, search_results: list) -> Any:
-        message = self.client.messages.create(
-            model="claude-3-5-sonnet-20240620",
+    def _run(self, meeting_data: dict) -> Dict:
+        client = anthropic.Anthropic(api_key=ANTHROPIC_API_KEY)
+        
+        # Check if we received a list of meetings in the meetings key
+        meetings = meeting_data.get('meetings', [])
+        if not isinstance(meetings, list):
+            meetings = [meeting_data]  # Convert single meeting to list
+            
+        # Format all meetings for analysis
+        meetings_text = "\n\n".join([
+            f"""Meeting {i+1}:
+            Topic: {m.get('topic')}
+            Start Time: {m.get('start_time')}
+            Duration: {m.get('duration')} minutes
+            Summary: {m.get('summary')}"""
+            for i, m in enumerate(meetings)
+        ])
+        
+        prompt = f"""
+        Please analyze these meetings:
+        
+        {meetings_text}
+        
+        Provide:
+        1. Key discussion points across all meetings
+        2. Main decisions or action items
+        3. Overall patterns and insights
+        4. Notable participants and their contributions
+        5. Recommendations for follow-up
+        """
+        
+        message = client.messages.create(
+            model="claude-3-sonnet-20240229",
             max_tokens=1000,
             temperature=0,
-            system="You are an AI assistant tasked with answering queries based on search results.",
-            messages=[
-                {
-                    "role": "user",
-                    "content": f"Based on the following search results, please provide a concise answer to the query: '{query}'\n\nSearch Results:\n{search_results}\n\nPlease synthesize the information from these results to directly answer the query. If the information is not sufficient to answer the query, please state that clearly."
-                }
-            ]
+            messages=[{"role": "user", "content": prompt}]
         )
-        return message.content
+        
+        return {
+            "meetings_analyzed": len(meetings),
+            "analysis": message.content,
+            "timestamp": datetime.now().isoformat()
+        }
 
-    async def _arun(self, query: str, search_results: list) -> Any:
-        raise NotImplementedError("Async not implemented")
-
-def get_crew_response(query):
-    # Initialize clients
-    client = QdrantClient("localhost", port=6333)
-    openai_client = OpenAI(api_key=os.environ['OPENAI_API_KEY'])
-    
+def get_crew_response(query: str) -> str:
     # Create tool instances
-    search_tool = QdrantSearchTool(qdrant_client=client, openai_client=openai_client)
-    analysis_tool = AnthropicAnalysisTool()
+    calculator = CalculatorTool()
+    searcher = SearchMeetingsTool()
+    analyzer = MeetingAnalysisTool()
     
     # Create agents
     researcher = Agent(
-        role="Research Analyst",
-        goal="Search through meeting recordings and extract relevant information",
-        backstory="""You are an expert at analyzing meeting recordings and extracting 
-                  key insights. You excel at understanding context and finding relevant information.""",
-        verbose=True,
-        allow_delegation=False,
-        tools=[search_tool]
+        role='Research Assistant',
+        goal='Find and analyze relevant information',
+        backstory="""You are an expert at finding and analyzing information.
+                  You know when to use calculations, when to search meetings,
+                  and when to perform detailed analysis.""",
+        tools=[calculator, searcher, analyzer],
+        verbose=True
     )
-
-    analyst = Agent(
-        role="Content Analyst",
-        goal="Analyze search results and create comprehensive responses",
-        backstory="""You specialize in analyzing search results and creating clear, 
-                  insightful responses using advanced AI analysis tools.""",
-        verbose=True,
-        allow_delegation=False,
-        tools=[analysis_tool]
+    
+    synthesizer = Agent(
+        role='Information Synthesizer',
+        goal='Create comprehensive and clear responses',
+        backstory="""You excel at taking raw information and analysis
+                  and creating clear, actionable insights.""",
+        verbose=True
     )
-
-    # Create tasks
-    search_task = Task(
-        description=f"""Search through the meeting recordings for information about: '{query}'
-                    Use the search_meetings tool to find relevant information.""",
+    
+    # Create tasks with expected_output
+    research_task = Task(
+        description=f"""Process this query: '{query}'
+                    1. If it involves calculations, use the calculator tool
+                    2. If it needs meeting information, use the search tool
+                    3. For detailed analysis, use both search and analysis tools
+                    Explain your tool selection and process.""",
+        expected_output="""A dictionary containing:
+                       - The tools used
+                       - The raw results from each tool
+                       - Any calculations or analysis performed""",
         agent=researcher
     )
-
-    analysis_task = Task(
-        description="""Analyze the search results using the Anthropic analysis tool to create 
-                    a comprehensive and accurate response.""",
-        agent=analyst
+    
+    synthesis_task = Task(
+        description="""Take the research results and create a clear response.
+                    Explain the process used and why it was appropriate.
+                    Make sure the response directly addresses the original query.""",
+        expected_output="""A clear, structured response that includes:
+                       - Direct answer to the query
+                       - Supporting evidence from the research
+                       - Explanation of the process used""",
+        agent=synthesizer
     )
-
+    
     # Create and run crew
     crew = Crew(
-        agents=[researcher, analyst],
-        tasks=[search_task, analysis_task],
-        verbose=2
+        agents=[researcher, synthesizer],
+        tasks=[research_task, synthesis_task],
+        verbose=True
     )
-
+    
     result = crew.kickoff()
     return result
 
 if __name__ == "__main__":
     if len(sys.argv) > 1:
-        query = ' '.join(sys.argv[1:])  # Allow multi-word queries
-        answer = get_crew_response(query)
-        print(f"Answer: {answer}")
+        query = ' '.join(sys.argv[1:])
+        try:
+            result = get_crew_response(query)
+            print(f"\nResult: {result}")
+        except Exception as e:
+            print(f"Error processing query: {str(e)}")
     else:
-        print("No query provided.") 
+        print("Please provide a query as a command line argument.") 
