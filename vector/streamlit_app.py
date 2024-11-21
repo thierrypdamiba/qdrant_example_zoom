@@ -1,5 +1,5 @@
 import streamlit as st
-from function_calling_crew import get_crew_response
+from crew import get_crew_response
 import time
 import sys
 from io import StringIO
@@ -81,80 +81,33 @@ def show_processing_steps():
 class ConsoleOutput:
     def __init__(self, placeholder):
         self.placeholder = placeholder
-        self.output = []
-        self.current_section = []
-        self.current_section_type = None
+        self.buffer = []
+        self.update_interval = 0.5  # seconds
+        self.last_update = time.time()
 
     def write(self, text):
-        # Skip empty lines and unwanted messages
-        if not text.strip() or "Overriding of current TracerProvider" in text:
+        print(text, file=sys.__stdout__)  # Console output
+        self.buffer.append(text)
+        
+        # Update display periodically
+        if time.time() - self.last_update > self.update_interval:
+            self._update_display()
+            self.last_update = time.time()
+
+    def _update_display(self):
+        if not self.buffer:
             return
             
-        # Clean up the text
-        text = text.replace('[00m', '').replace('[92m', '')
+        # Process all buffered text at once
+        full_text = '\n'.join(self.buffer)
+        self.buffer = []  # Clear buffer
         
-        # Check if this is a new section
-        section_markers = {
-            'Agent:': '🤖 AGENT',
-            'Task:': '📋 TASK',
-            'Tool Input:': '📥 INPUT',
-            'Tool Output:': '📤 OUTPUT',
-            'Thought:': '💭 THOUGHT'
-        }
-        
-        for marker, header in section_markers.items():
-            if marker in text:
-                # If we have a previous section, add it to output
-                if self.current_section:
-                    self.output.append('\n'.join(self.current_section))
-                    self.output.append('\n' + '-'*50 + '\n')  # Add separator
-                
-                # Start new section
-                self.current_section = [f"### {header} ###"]
-                self.current_section_type = marker
-                text = text.replace(marker, '').strip()
-                break
-        
-        # Format JSON-like content
-        if text.strip().startswith('{') or text.strip().startswith('['):
-            try:
-                import json
-                parsed = json.loads(text)
-                text = json.dumps(parsed, indent=2)
-            except:
-                pass
-        
-        # Wrap long lines (except for JSON content)
-        if not (text.strip().startswith('{') or text.strip().startswith('[')):
-            import textwrap
-            wrapped_lines = []
-            for line in text.split('\n'):
-                # Wrap at 80 characters, preserving indentation
-                wrapped = textwrap.fill(line, width=80, subsequent_indent='    ')
-                wrapped_lines.append(wrapped)
-            text = '\n'.join(wrapped_lines)
-        
-        # Add text to current section
-        self.current_section.append(text)
-        
-        # Format and display the complete output
-        full_output = '\n'.join([
-            *self.output,
-            '\n'.join(self.current_section)
-        ])
-        
-        # Create a container with custom CSS for better text wrapping
+        # Update display
         self.placeholder.markdown(
-            f"""<div style='font-family: monospace; white-space: pre-wrap; 
-            word-wrap: break-word; overflow-wrap: break-word; 
-            max-width: 100%; padding: 10px; background-color: #f0f2f6; 
-            border-radius: 5px;'>
-            {full_output.replace('{', '{{').replace('}', '}}')}</div>""", 
+            f"""<div style='font-family: monospace; white-space: pre-wrap;'>
+            {full_text}</div>""", 
             unsafe_allow_html=True
         )
-
-    def flush(self):
-        pass
 
 with tab1:
     # Initialize chat history
