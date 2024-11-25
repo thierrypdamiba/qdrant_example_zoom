@@ -56,9 +56,9 @@ git clone https://github.com/your-repo.git
 cd vector-search-powered-agentic-workflow
 ```
 
-4. Create and activate a Python virtual environment:
+4. Create and activate a Python virtual environment using Python 3.10 for compatability:
 ```bash
-python3 -m venv venv
+python3.10 -m venv venv
 source venv/bin/activate  # Windows: venv\Scripts\activate
 ```
 
