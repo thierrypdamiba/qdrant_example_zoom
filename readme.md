@@ -49,25 +49,29 @@ Before running any code, complete these prerequisite steps:
 
 2. Clone the repository:
 ```bash
-git clone https://github.com/your-repo.git
+git clone [https://github.com/your-repo.git](https://github.com/thierrypdamiba/qdrant_example_zoom.git)
 ```
 3. Navigate to the project directory:
 ```bash
 cd vector-search-powered-agentic-workflow
 ```
+4. Swap to the crewai branch :
+```bash
+git checkout crewai
+```
 
-4. Create and activate a Python virtual environment using Python 3.10 for compatability:
+5. Create and activate a Python virtual environment using Python 3.10 for compatability:
 ```bash
 python3.10 -m venv venv
 source venv/bin/activate  # Windows: venv\Scripts\activate
 ```
 
-4. Install dependencies:
+6. Install dependencies:
 ```bash
 pip install -r requirements.txt
 ```
 
-5. Configure environment variables in `.env.local`:
+7. Configure environment variables in `.env.local`:
 ```
 openai_api_key=your_key_here
 anthropic_api_key=your_key_here
