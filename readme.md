@@ -102,18 +102,7 @@ You'll see logs in your console showing:
 - Collection creation/verification status
 - Batch upload progress
 - Final verification of indexed meetings
-
-If you see warnings about missing or duplicate entries, you may need to run the script again.
-
-2. Test the search functionality:
-```bash
-# The script will automatically run a test search for "marketing strategy"
-# You should see results showing:
-# - Meeting topics
-# - Search relevance scores
-# - User information
-# - Meeting durations
-```
+- Output for a test query that should return 10 results
 
 3. Launch the Streamlit interface:
 ```bash
@@ -121,18 +110,10 @@ streamlit run vector/streamlit_app.py
 ```
 
 When the interface loads:
-- Enter natural language queries in the search box
+- Try asking a question about marketing meetings
 - View matching meetings ranked by relevance
 - See meeting summaries and key details
 - Get AI-generated insights about the meetings
-
-Example queries:
-- "Find meetings about product launches"
-- "Show me marketing discussions from last month"
-- "What was discussed in the longest meeting?"
-- "Find meetings where [person's name] presented"
-
-The system uses both vector search and content matching as a fallback, so you'll get relevant results even if exact matches aren't found.
 
 ## Components
 
