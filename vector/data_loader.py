@@ -10,16 +10,13 @@ from dotenv import load_dotenv
 import uuid
 import base64
 from openai import OpenAI
-from asknews_sdk import AskNewsSDK
 
-# Load environment variables from .env.local
+# Load environment variables
 env_path = Path(__file__).parent.parent / '.env.local'
 load_dotenv(env_path)
 
-# Set API keys from environment
+# Set OpenAI key explicitly in environment with correct name
 os.environ['OPENAI_API_KEY'] = os.getenv('openai_api_key')
-ASKNEWS_CLIENT_ID = os.getenv('ASKNEWS_CLIENT_ID')
-ASKNEWS_CLIENT_SECRET = os.getenv('ASKNEWS_CLIENT_SECRET')
 
 class MeetingData:
     _instance = None
@@ -47,11 +44,6 @@ class MeetingData:
         )
         self.openai_client = OpenAI()
         self.embedding_model = SentenceTransformer('all-MiniLM-L6-v2')
-        self.ask_news = AskNewsSDK(
-            client_id=ASKNEWS_CLIENT_ID,
-            client_secret=ASKNEWS_CLIENT_SECRET,
-            scopes=["news", "chat", "stories", "analytics"]
-        )
         
         # Ensure collection exists and is populated
         self._ensure_collection_exists()
@@ -80,7 +72,7 @@ class MeetingData:
             self.qdrant_client.recreate_collection(
                 collection_name='zoom_recordings',
                 vectors_config=models.VectorParams(
-                    size=1536,  # Changed to OpenAI embedding dimension
+                    size=384,  # SentenceTransformer dimension
                     distance=models.Distance.COSINE
                 )
             )
@@ -110,12 +102,8 @@ class MeetingData:
                 Summary: {json.dumps(meeting.get('summary', {}))}
                 """
                 
-                # Get embedding from OpenAI instead of SentenceTransformer
-                response = self.openai_client.embeddings.create(
-                    model="text-embedding-ada-002",
-                    input=text_to_embed
-                )
-                vector = response.data[0].embedding
+                # Get embedding from SentenceTransformer instead of OpenAI
+                vector = self.embedding_model.encode(text_to_embed).tolist()
                 
                 # Create point ID from meeting UUID if available
                 point_id = self._base64_to_uuid(meeting.get('uuid', str(uuid.uuid4())))
@@ -206,62 +194,79 @@ class MeetingData:
             print(f"LOG: Error checking Qdrant status: {e}")
             print("LOG: WARNING - Qdrant collection may not be properly configured!")
 
-    def _vector_search(self, query: str, limit: int = 10) -> List[Dict[str, Any]]:
-        """Perform vector search in Qdrant collection."""
+    def search_meetings(self, query: str, limit: int = 10) -> List[Dict[str, Any]]:
+        """Search through meetings using vector search"""
+        print(f"LOG: Searching meetings with query: {query}")
+        
+        # For statistical queries, return all meetings
+        if any(word in query.lower() for word in ['average', 'mean', 'total', 'count', 'statistics']):
+            print("LOG: Statistical query detected - returning all meetings")
+            return self.meetings
+
         try:
-            # Generate embedding using OpenAI instead of SentenceTransformer
+            # Get embedding from OpenAI
+            print("LOG: Getting OpenAI embedding for query")
             response = self.openai_client.embeddings.create(
                 model="text-embedding-ada-002",
                 input=query
             )
             query_vector = response.data[0].embedding
             
-            # Search in Qdrant
-            search_results = self.qdrant_client.search(
+            # Search Qdrant with limit of 10
+            print("LOG: Searching Qdrant")
+            vector_results = self.qdrant_client.search(
                 collection_name='zoom_recordings',
                 query_vector=query_vector,
-                limit=limit
+                limit=10,  # Changed from default to 10
+                score_threshold=0.7  # Only return good matches
             )
             
-            # Format results
-            results = []
-            for result in search_results:
-                result_dict = result.payload
-                result_dict['score'] = result.score
-                result_dict['type'] = 'meeting'
-                results.append(result_dict)
+            if vector_results:
+                print(f"LOG: Found {len(vector_results)} matches in Qdrant")
+                return [
+                    {
+                        'score': hit.score,
+                        'topic': hit.payload.get('topic', 'N/A'),
+                        'start_time': hit.payload.get('start_time', 'N/A'),
+                        'duration': hit.payload.get('duration', 'N/A'),
+                        'summary': hit.payload.get('summary', {}),
+                        'user': hit.payload.get('user', {}),
+                        'content': hit.payload.get('vtt_content', '')
+                    }
+                    for hit in vector_results
+                ]
+            else:
+                print("LOG: No vector matches found, falling back to content matching")
                 
-            return results
-            
         except Exception as e:
-            print(f"LOG: Error in vector search: {e}")
-            return []
+            print(f"LOG: Vector search failed: {e}")
+            print("LOG: Falling back to content matching")
 
-    def search_meetings(self, query: str, limit: int = 10, include_news: bool = False) -> List[Dict[str, Any]]:
-        """Search through meetings using vector search and optionally include news"""
-        print(f"LOG: Searching meetings with query: {query}")
-        
-        results = []
-        
-        # Get vector search results
-        vector_results = self._vector_search(query, limit)
-        if vector_results:
-            results.extend(vector_results)
+        # Fallback to content matching
+        matches = []
+        for meeting in self.meetings:
+            score = 0
+            if query.lower() in meeting['topic'].lower():
+                score += 0.5
+            if 'vtt_content' in meeting and query.lower() in meeting['vtt_content'].lower():
+                score += 0.3
+            if 'summary' in meeting and query.lower() in str(meeting['summary']).lower():
+                score += 0.2
             
-        # Optionally include news results
-        if include_news:
-            try:
-                news_context = self.ask_news.news.search_news(query).as_string
-                results.append({
-                    'score': 1.0,
-                    'type': 'news',
-                    'content': news_context,
-                    'source': 'AskNews'
+            if score > 0:
+                matches.append({
+                    'score': score,
+                    'topic': meeting['topic'],
+                    'start_time': meeting['start_time'],
+                    'duration': meeting['duration'],
+                    'summary': meeting.get('summary', {}),
+                    'user': meeting.get('user', {}),
+                    'content': meeting.get('vtt_content', '')
                 })
-            except Exception as e:
-                print(f"LOG: Error fetching news: {e}")
         
-        return results
+        matches.sort(key=lambda x: x['score'], reverse=True)
+        print(f"LOG: Found {len(matches)} matches using content matching")
+        return matches[:limit]
 
     def get_average_duration(self) -> float:
         """Calculate and return the average meeting duration."""
